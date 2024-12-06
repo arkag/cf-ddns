@@ -1,0 +1,69 @@
+#!/usr/bin/env bash
+
+set -e
+
+# These should be sourced from your environment
+# DDNS_ZONE=""
+# DDNS_RECORD=""
+# CF_DDNS_EMAIL=""
+# CF_DDNS_KEY=""
+
+DDNS_NAME="${DDNS_RECORD}.${DDNS_ZONE}"
+
+# Pull public IP
+PUBLIC_IP=$(curl -s 'https://api.ipify.org')
+
+LIST_ZONES=$(curl -s --request GET \
+  --url https://api.cloudflare.com/client/v4/zones \
+  --header "X-Auth-Email: ${CF_DDNS_EMAIL}" \
+  --header "X-Auth-Key: ${CF_DDNS_KEY}" \
+  --header 'Content-Type: application/json')
+
+ZONE_ID=$(echo ${LIST_ZONES} | jq -r '.result[] | select(.name == "'"${DDNS_ZONE}"'") | .id')
+
+echo "ZONE_ID = ${ZONE_ID}"
+
+ZONE_RECORDS=$(curl -s --request GET \
+  --url https://api.cloudflare.com/client/v4/zones/${ZONE_ID}/dns_records \
+  --header 'Content-Type: application/json' \
+  --header "X-Auth-Email: ${CF_DDNS_EMAIL}" \
+  --header "X-Auth-Key: ${CF_DDNS_KEY}") 
+
+TARGET_RECORD=$(echo ${ZONE_RECORDS} | jq '.result[] | select(.name == "'"${DDNS_NAME}"'" and .type == "A")')
+
+echo "TARGET_RECORD = ${TARGET_RECORD}"
+
+if [[ -z "${TARGET_RECORD}" ]]; then
+  logger "___ ${DDNS_RECORD} in ${DDNS_ZONE} doesn't exist, creating it ___"
+  curl -s --request POST \
+    --url https://api.cloudflare.com/client/v4/zones/${ZONE_ID}/dns_records \
+    --header 'Content-Type: application/json' \
+    --header "X-Auth-Email: ${CF_DDNS_EMAIL}" \
+    --header "X-Auth-Key: ${CF_DDNS_KEY}" \
+    --data '{
+    "comment": "DDNS for home internet",
+    "name": "'"${DDNS_NAME}"'",
+    "proxied": false,
+    "ttl": 3600,
+    "content": "'"${PUBLIC_IP}"'",
+    "type": "A"
+  }' | jq '.'
+else
+  logger "___ ${DDNS_RECORD} in ${DDNS_ZONE} found, updating record ___"
+  RECORD_ID=$(echo $TARGET_RECORD | jq -r '.id')
+  echo "RECORD_ID = ${RECORD_ID}"
+  # Update with Cloudflare API
+  curl -s --request PATCH \
+    --url https://api.cloudflare.com/client/v4/zones/${ZONE_ID}/dns_records/${RECORD_ID} \
+    --header 'Content-Type: application/json' \
+    --header "X-Auth-Email: ${CF_DDNS_EMAIL}" \
+    --header "X-Auth-Key: ${CF_DDNS_KEY}" \
+    --data '{
+    "comment": "DDNS for home internet",
+    "name": "'"${DDNS_NAME}"'",
+    "proxied": false,
+    "ttl": 3600,
+    "content": "'"${PUBLIC_IP}"'",
+    "type": "A"
+  }' | jq '.'
+fi
